@@ -1,0 +1,87 @@
+<!--
+  SCRIPT DE DEBUG - Para descobrir por que não funciona no GTM
+
+  COMO USAR:
+  1. Cole este script no GTM
+  2. Abra o Console do site clonado
+  3. Procure as mensagens [GTM Debug]
+  4. Me envie o que aparecer
+-->
+
+<script>
+(function() {
+    console.log('[GTM Debug] ========== INICIANDO DEBUG ==========');
+    console.log('[GTM Debug] Timestamp:', new Date().toISOString());
+
+    // Verificar contexto
+    console.log('[GTM Debug] window === top:', window === window.top);
+    console.log('[GTM Debug] window.location:', window.location.href);
+
+    // Verificar se fetch existe
+    console.log('[GTM Debug] window.fetch existe:', typeof window.fetch);
+    console.log('[GTM Debug] window.fetch é função:', typeof window.fetch === 'function');
+
+    // Verificar XMLHttpRequest
+    console.log('[GTM Debug] XMLHttpRequest existe:', typeof window.XMLHttpRequest);
+
+    // Verificar sessionStorage
+    try {
+        sessionStorage.setItem('test', 'ok');
+        console.log('[GTM Debug] sessionStorage acessível: SIM');
+        sessionStorage.removeItem('test');
+    } catch(e) {
+        console.log('[GTM Debug] sessionStorage acessível: NÃO -', e.message);
+    }
+
+    // Tentar interceptar fetch
+    if (window.fetch) {
+        var originalFetch = window.fetch;
+        console.log('[GTM Debug] Fetch original capturado:', typeof originalFetch);
+
+        window.fetch = function() {
+            console.log('[GTM Debug] ✅ FETCH INTERCEPTADO!', arguments[0]);
+            return originalFetch.apply(this, arguments);
+        };
+
+        console.log('[GTM Debug] Fetch substituído com sucesso');
+    }
+
+    // Tentar interceptar XHR
+    if (window.XMLHttpRequest) {
+        var originalOpen = XMLHttpRequest.prototype.open;
+        console.log('[GTM Debug] XHR.open original capturado:', typeof originalOpen);
+
+        XMLHttpRequest.prototype.open = function(method, url) {
+            console.log('[GTM Debug] ✅ XHR INTERCEPTADO!', method, url);
+            return originalOpen.apply(this, arguments);
+        };
+
+        console.log('[GTM Debug] XHR.open substituído com sucesso');
+    }
+
+    // Teste imediato
+    console.log('[GTM Debug] Fazendo teste de fetch...');
+    setTimeout(function() {
+        if (window.fetch) {
+            fetch('https://httpbin.org/get')
+                .then(function() {
+                    console.log('[GTM Debug] Fetch de teste completado');
+                })
+                .catch(function(e) {
+                    console.log('[GTM Debug] Fetch de teste falhou:', e);
+                });
+        }
+    }, 1000);
+
+    // Verificar quando o script foi executado
+    console.log('[GTM Debug] document.readyState:', document.readyState);
+    console.log('[GTM Debug] DOMContentLoaded já disparou:', document.readyState !== 'loading');
+
+    // Verificar se há outros scripts que podem ter capturado fetch antes
+    console.log('[GTM Debug] Verificando se fetch foi modificado antes...');
+    console.log('[GTM Debug] fetch.toString():', window.fetch ? window.fetch.toString().substring(0, 100) : 'N/A');
+
+    console.log('[GTM Debug] ========== FIM DO DEBUG ==========');
+    console.log('[GTM Debug] Aguarde alguns segundos e veja se aparecem mensagens de interceptação...');
+})();
+</script>

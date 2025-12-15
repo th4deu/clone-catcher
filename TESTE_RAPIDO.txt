@@ -1,0 +1,91 @@
+╔══════════════════════════════════════════════════════════════╗
+║        🔥 TESTE RÁPIDO - Execute no Site Clonado            ║
+╚══════════════════════════════════════════════════════════════╝
+
+1️⃣ Acesse o site clonado que você quer monitorar
+
+2️⃣ Abra o Console do navegador (pressione F12)
+
+3️⃣ Cole e execute este código:
+
+────────────────────────────────────────────────────────────────
+
+fetch('https://cc-sorteador.on-forge.com/api/collect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    mode: 'cors',
+    body: JSON.stringify({
+        sessionId: 'teste_' + Date.now(),
+        domain: window.location.hostname,
+        url: window.location.href,
+        referrer: document.referrer,
+        screenResolution: screen.width + 'x' + screen.height,
+        language: navigator.language,
+        timestamp: new Date().toISOString(),
+        requests: [{
+            type: 'teste_console',
+            message: 'Teste do site ' + window.location.hostname,
+            timestamp: new Date().toISOString()
+        }]
+    })
+})
+.then(r => {
+    console.log('📊 Status:', r.status);
+    return r.json();
+})
+.then(data => {
+    console.log('✅ SUCESSO! Dados enviados:', data);
+    console.log('🎉 ID do log:', data.id);
+    console.log('\n✅ Está funcionando! Pode configurar o GTM.');
+})
+.catch(err => {
+    console.error('❌ ERRO:', err.message);
+    console.log('\n🔧 SOLUÇÃO:');
+    if (err.message.includes('CORS')) {
+        console.log('❌ Problema de CORS detectado!');
+        console.log('📝 Execute no servidor Laravel:');
+        console.log('   php artisan config:clear');
+        console.log('   php artisan cache:clear');
+    }
+});
+
+────────────────────────────────────────────────────────────────
+
+📊 RESULTADOS ESPERADOS:
+
+✅ Se funcionar:
+   Status: 201
+   Resposta: {"status":"success","id":123}
+   → Pode configurar o GTM normalmente
+
+❌ Se der erro:
+   "CORS policy" ou "Failed to fetch"
+   → Execute os comandos de solução abaixo
+
+────────────────────────────────────────────────────────────────
+
+🔧 SOLUÇÃO PARA ERRO DE CORS:
+
+No servidor Laravel, execute:
+
+php artisan config:clear
+php artisan cache:clear
+php artisan route:clear
+
+Se ainda não funcionar, verifique se o arquivo config/cors.php
+tem 'allowed_origins' => ['*']
+
+────────────────────────────────────────────────────────────────
+
+💡 DICA RÁPIDA:
+
+Se o teste acima funcionar ✅ mas o GTM não funciona ❌,
+o problema está na configuração da Tag no GTM, não no servidor.
+
+Verifique:
+- Tag tipo: HTML Personalizado
+- Acionador: All Pages
+- Script completo colado
+- Tag publicada (não só em visualização)
+
+────────────────────────────────────────────────────────────────

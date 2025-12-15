@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug Clone Tracker</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #00ff00;
+        }
+        .log {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #00ff00;
+            border-radius: 5px;
+        }
+        .error { color: #ff0000; border-color: #ff0000; }
+        .success { color: #00ff00; border-color: #00ff00; }
+        .info { color: #ffff00; border-color: #ffff00; }
+        button {
+            background: #00ff00;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            margin: 10px 5px;
+            cursor: pointer;
+            font-family: monospace;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #00cc00;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 Debug Clone Tracker - GTM</h1>
+    <p>Use este arquivo para testar o envio de dados do site clonado</p>
+
+    <button onclick="testCORS()">1️⃣ Testar CORS</button>
+    <button onclick="testEndpoint()">2️⃣ Testar Endpoint</button>
+    <button onclick="testFullScript()">3️⃣ Testar Script Completo</button>
+    <button onclick="clearLogs()">🗑️ Limpar Logs</button>
+
+    <div id="logs"></div>
+
+    <script>
+        const COLLECTOR_URL = 'https://cc-sorteador.on-forge.com/api/collect';
+        const logsDiv = document.getElementById('logs');
+
+        function log(message, type = 'info') {
+            const div = document.createElement('div');
+            div.className = 'log ' + type;
+            div.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logsDiv.insertBefore(div, logsDiv.firstChild);
+        }
+
+        function clearLogs() {
+            logsDiv.innerHTML = '';
+            log('Logs limpos', 'info');
+        }
+
+        // Teste 1: Verificar se o CORS está permitindo requisições
+        async function testCORS() {
+            log('🔍 Testando CORS...', 'info');
+
+            try {
+                const response = await fetch(COLLECTOR_URL, {
+                    method: 'OPTIONS',
+                    headers: {
+                        'Access-Control-Request-Method': 'POST',
+                        'Access-Control-Request-Headers': 'Content-Type',
+                    }
+                });
+
+                log(`✅ CORS Preflight: ${response.status}`, 'success');
+
+                const headers = {};
+                for (let [key, value] of response.headers.entries()) {
+                    if (key.includes('access-control')) {
+                        headers[key] = value;
+                    }
+                }
+
+                log(`📋 Headers CORS: ${JSON.stringify(headers, null, 2)}`, 'info');
+
+                if (response.ok) {
+                    log('✅ CORS está configurado corretamente!', 'success');
+                } else {
+                    log('❌ CORS pode estar bloqueando. Status: ' + response.status, 'error');
+                }
+
+            } catch (error) {
+                log('❌ Erro no teste de CORS: ' + error.message, 'error');
+                log('💡 Isso pode indicar que o CORS está bloqueando completamente', 'info');
+            }
+        }
+
+        // Teste 2: Testar envio real de dados
+        async function testEndpoint() {
+            log('📤 Enviando dados de teste...', 'info');
+
+            const testData = {
+                sessionId: 'debug_test_' + Date.now(),
+                domain: window.location.hostname || 'localhost',
+                url: window.location.href,
+                referrer: document.referrer || '',
+                screenResolution: screen.width + 'x' + screen.height,
+                language: navigator.language,
+                timestamp: new Date().toISOString(),
+                requests: [
+                    {
+                        type: 'debug_test',
+                        message: 'Teste de debug do site: ' + window.location.hostname,
+                        timestamp: new Date().toISOString()
+                    }
+                ]
+            };
+
+            log('📦 Payload: ' + JSON.stringify(testData, null, 2), 'info');
+
+            try {
+                const response = await fetch(COLLECTOR_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(testData),
+                    mode: 'cors'
+                });
+
+                log(`📡 Status HTTP: ${response.status} ${response.statusText}`,
+                    response.ok ? 'success' : 'error');
+
+                const responseData = await response.json();
+                log('📨 Resposta: ' + JSON.stringify(responseData, null, 2),
+                    responseData.status === 'success' ? 'success' : 'error');
+
+                if (responseData.status === 'success') {
+                    log(`🎉 SUCESSO! Dados enviados com ID: ${responseData.id}`, 'success');
+                    log('✅ O endpoint está funcionando corretamente neste site!', 'success');
+                } else {
+                    log('❌ Resposta de erro do servidor', 'error');
+                }
+
+            } catch (error) {
+                log('❌ Erro ao enviar: ' + error.message, 'error');
+                log('💡 Detalhes do erro: ' + error.toString(), 'error');
+
+                if (error.message.includes('CORS')) {
+                    log('🔧 SOLUÇÃO: Configure o CORS no servidor Laravel', 'info');
+                    log('   - Adicione o domínio atual aos allowed_origins', 'info');
+                    log('   - Domínio atual: ' + window.location.origin, 'info');
+                }
+            }
+        }
+
+        // Teste 3: Testar script completo (versão simplificada)
+        async function testFullScript() {
+            log('🚀 Testando script completo...', 'info');
+
+            let capturedRequests = [];
+
+            // Simular captura de eventos
+            log('📸 Capturando evento de página...', 'info');
+            capturedRequests.push({
+                type: 'page_load',
+                url: window.location.href,
+                timestamp: new Date().toISOString()
+            });
+
+            // Simular clique
+            log('🖱️ Simulando clique...', 'info');
+            capturedRequests.push({
+                type: 'click',
+                tagName: 'BUTTON',
+                text: 'Teste de Debug',
+                timestamp: new Date().toISOString()
+            });
+
+            // Enviar dados
+            const data = {
+                sessionId: 'full_script_test_' + Date.now(),
+                domain: window.location.hostname || 'localhost',
+                url: window.location.href,
+                referrer: document.referrer || '',
+                screenResolution: screen.width + 'x' + screen.height,
+                language: navigator.language,
+                timestamp: new Date().toISOString(),
+                requests: capturedRequests
+            };
+
+            log('📦 Enviando ' + capturedRequests.length + ' eventos...', 'info');
+
+            try {
+                const response = await fetch(COLLECTOR_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data),
+                    mode: 'cors'
+                });
+
+                const responseData = await response.json();
+
+                if (responseData.status === 'success') {
+                    log('🎉 Script completo funcionando! ID: ' + responseData.id, 'success');
+                } else {
+                    log('❌ Script retornou erro: ' + JSON.stringify(responseData), 'error');
+                }
+
+            } catch (error) {
+                log('❌ Erro no script: ' + error.message, 'error');
+            }
+        }
+
+        // Informações do ambiente
+        log('🌍 Domínio atual: ' + window.location.hostname, 'info');
+        log('📍 URL atual: ' + window.location.href, 'info');
+        log('🎯 Endpoint: ' + COLLECTOR_URL, 'info');
+        log('', 'info');
+        log('👆 Clique nos botões acima para testar', 'info');
+    </script>
+</body>
+</html>

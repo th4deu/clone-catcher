@@ -12,9 +12,32 @@ class CollectorController extends Controller
     public function store(Request $request)
     {
         try {
+            // Lista de domínios originais para ignorar
+            $originalDomains = [
+                'sorteador.com.br',
+                'www.sorteador.com.br',
+            ];
+
+            $domain = $request->input('domain');
+
+            // Verificar se é domínio original
+            foreach ($originalDomains as $originalDomain) {
+                if (stripos($domain, $originalDomain) !== false) {
+                    Log::info('Blocked original domain', [
+                        'domain' => $domain,
+                        'ip' => $request->ip(),
+                    ]);
+
+                    return response()->json([
+                        'status' => 'success',
+                        'message' => 'Ignored',
+                    ], 200);
+                }
+            }
+
             $data = [
                 'session_id' => $request->input('sessionId'),
-                'domain' => $request->input('domain'),
+                'domain' => $domain,
                 'url' => $request->input('url'),
                 'client_ip' => $request->ip(),
                 'client_user_agent' => $request->userAgent(),

